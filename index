@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Integriva — by Delfina Olmedo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ============ BARRA SUPERIOR (solo dentro de la app) ============ -->
+  <header id="topbar" class="topbar hidden">
+    <div class="brand" onclick="App.go(App.membership.active ? 'dashboard' : 'landing')">
+      <img src="assets/logo.png" alt="Integriva" class="brand-logo"
+           onerror="this.style.display='none';document.getElementById('brandTxt').style.display='flex'">
+      <span id="brandTxt" class="brand-text" style="display:none">
+        <span class="logo-dot"></span>
+        <span>Integriva <small>by Delfina Olmedo</small></span>
+      </span>
+    </div>
+    <nav id="topnav" class="topnav"></nav>
+    <button class="ghost-btn" onclick="App.reset()" title="Borrar todos los datos de prueba">Reiniciar demo</button>
+  </header>
+
+  <main id="app"></main>
+
+  <!-- Banner de aviso de prototipo -->
+  <div class="proto-banner">Prototipo de demostración · Los pagos son simulados · Los datos se guardan solo en este navegador</div>
+
+  <script src="app.js"></script>
+</body>
+</html>
