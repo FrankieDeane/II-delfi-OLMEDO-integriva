@@ -431,7 +431,6 @@ App.screens = {
   /* ---------------- VERIFICACIÓN DE EMAIL (OTP real) ---------------- */
   verificar() {
     const u = this.user;
-    const demo = !this.auth.enabled;
     const boxes = Array.from({length:6}, (_,i) =>
       `<input class="otp-box" data-i="${i}" inputmode="numeric" maxlength="1"
               aria-label="Dígito ${i+1} de 6" autocomplete="${i===0?'one-time-code':'off'}">`).join('');
@@ -456,8 +455,6 @@ App.screens = {
           <span id="resendHint" class="muted" style="font-size:.82rem"></span></p>
       </div>
       <p class="auth-secure center">🔒 Tus datos de salud viajan cifrados y solo vos podés verlos.</p>
-      ${demo ? `<p class="muted center" style="font-size:.82rem">⚠️ Modo demo: el envío de emails no está configurado.
-        Cargá las credenciales de Appwrite en <b>config.js</b> para que el código llegue de verdad.</p>` : ''}
     </div>`;
   },
 
