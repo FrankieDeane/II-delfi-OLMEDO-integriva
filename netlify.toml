@@ -1,0 +1,6 @@
+# Configuración de Netlify para Integriva (sitio estático).
+# En cada deploy generamos config.js desde las variables de entorno,
+# así las credenciales NO quedan escritas en el repositorio.
+[build]
+  command = "bash generate-config.sh"
+  publish = "."

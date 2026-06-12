@@ -63,6 +63,16 @@ El registro ya **no** usa un código de mentira: envía un **código de 6 dígit
 
 Si `config.js` no tiene credenciales, la app sigue abriéndose en **modo demo** (no envía emails y lo avisa en pantalla).
 
+### Deploy en Netlify (variables de entorno)
+Para no escribir las claves en el repositorio, en el deploy generamos `config.js` solo (`generate-config.sh` + `netlify.toml`). En Netlify: *Site settings → Environment variables*, agregá:
+
+| Variable | Valor |
+|---|---|
+| `SUPABASE_URL` | la *Project URL* de Supabase (ej. `https://xxxxxxxx.supabase.co`) |
+| `SUPABASE_ANON_KEY` | la clave **anon public** de Supabase |
+
+Después *Deploys → Trigger deploy → Clear cache and deploy site*. La clave `anon` es pública (pensada para el navegador), así que es seguro tenerla en el sitio; usamos variables solo para mantener el repo limpio.
+
 ## Si más adelante querés la versión REAL (en producción)
 Ya tenés **login real** (arriba). Falta sumar: **Mercado Pago de verdad** (cuenta + credenciales), recetas/cálculos validados por nutricionista, y hosting. Conviene hacerlo *después* de validar la idea con este prototipo.
 

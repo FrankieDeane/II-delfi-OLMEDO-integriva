@@ -372,26 +372,30 @@ App.screens = {
   verificar() {
     const u = this.user;
     const demo = !this.auth.enabled;
+    const boxes = Array.from({length:6}, (_,i) =>
+      `<input class="otp-box" data-i="${i}" inputmode="numeric" maxlength="1"
+              aria-label="Dígito ${i+1} de 6" autocomplete="${i===0?'one-time-code':'off'}">`).join('');
     return `
     <div class="wrap narrow">
       <button class="link" onclick="App.go('registro')">← Volver</button>
-      <div class="card center" style="margin-top:14px">
-        <div style="font-size:3rem">📩</div>
+      <div class="auth-card card center" style="margin-top:14px">
+        <div class="auth-badge">📩</div>
         <h2>Revisá tu correo</h2>
-        <p class="muted" style="max-width:34em;margin:0 auto 6px">Te enviamos un código de 6 dígitos a <b>${u.email}</b>. Ingresalo abajo para activar tu cuenta y proteger tus datos.</p>
-        <p class="muted" style="font-size:.84rem;margin-top:6px">Puede tardar un minuto. Si no aparece, revisá la carpeta de <b>spam</b> o correo no deseado.</p>
-      </div>
+        <p class="muted" style="max-width:34em;margin:0 auto 4px">Te enviamos un código de 6 dígitos a</p>
+        <p class="auth-email">${u.email}</p>
+        <p class="muted" style="font-size:.84rem;margin-top:10px">Puede tardar un minuto. Si no aparece, mirá la carpeta de <b>spam</b>.</p>
 
-      <div class="card">
-        <div class="field"><label for="codeInput">Código de verificación</label>
-          <input id="codeInput" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
-                 aria-label="Código de 6 dígitos" placeholder="••••••"
-                 style="letter-spacing:.3em;text-align:center;font-size:1.4rem"></div>
-        <div id="codeErr" class="error hidden" role="alert"></div>
-        <button id="verifyBtn" class="btn block big" onclick="App.verifyAccount(document.getElementById('codeInput').value.trim())">Confirmar registro →</button>
-        <p class="muted center" style="font-size:.84rem;margin-top:14px">¿No te llegó?
-          <button id="resendBtn" class="link" onclick="App.resendCode()">Reenviar email</button></p>
+        <div class="otp-group" id="otpGroup" role="group" aria-label="Código de verificación">${boxes}</div>
+        <div id="codeErr" class="error center hidden" role="alert"></div>
+
+        <button id="verifyBtn" class="btn block big" style="margin-top:18px"
+                onclick="App.verifyAccount(App.collectOtp())">Confirmar registro →</button>
+
+        <p class="muted center" style="font-size:.88rem;margin-top:16px">¿No te llegó?
+          <button id="resendBtn" class="link" onclick="App.resendCode()">Reenviar email</button>
+          <span id="resendHint" class="muted" style="font-size:.82rem"></span></p>
       </div>
+      <p class="auth-secure center">🔒 Tus datos de salud viajan cifrados y solo vos podés verlos.</p>
       ${demo ? `<p class="muted center" style="font-size:.82rem">⚠️ Modo demo: el envío de emails no está configurado.
         Cargá las credenciales de Supabase en <b>config.js</b> para que el código llegue de verdad.</p>` : ''}
     </div>`;
@@ -744,29 +748,68 @@ App.afterRender = {
       App.go('dashboard');
     });
   },
+  verificar() {
+    const boxes = Array.from(document.querySelectorAll('.otp-box'));
+    if (!boxes.length) return;
+    boxes[0].focus();
+    const onlyDigits = (s) => (s || '').replace(/\D/g, '');
+    boxes.forEach((box, i) => {
+      box.addEventListener('input', () => {
+        box.value = onlyDigits(box.value).slice(-1);
+        if (box.value && i < boxes.length - 1) boxes[i+1].focus();
+        if (boxes.every(b => b.value)) App.verifyAccount(App.collectOtp());
+      });
+      box.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace' && !box.value && i > 0) { boxes[i-1].focus(); boxes[i-1].value = ''; }
+        if (e.key === 'ArrowLeft' && i > 0) boxes[i-1].focus();
+        if (e.key === 'ArrowRight' && i < boxes.length - 1) boxes[i+1].focus();
+      });
+      box.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const digits = onlyDigits((e.clipboardData || window.clipboardData).getData('text')).slice(0, 6);
+        digits.split('').forEach((d, k) => { if (boxes[k]) boxes[k].value = d; });
+        (boxes[Math.min(digits.length, 5)] || box).focus();
+        if (boxes.every(b => b.value)) App.verifyAccount(App.collectOtp());
+      });
+    });
+  },
 };
 
 /* ============================================================
    ACCIONES
    ============================================================ */
+App.collectOtp = function() {
+  return Array.from(document.querySelectorAll('.otp-box')).map(b => b.value).join('').trim();
+};
+App._resetOtp = function() {
+  const boxes = Array.from(document.querySelectorAll('.otp-box'));
+  boxes.forEach(b => { b.value = ''; });
+  if (boxes[0]) boxes[0].focus();
+};
+
 App.verifyAccount = async function(code) {
   const err = document.getElementById('codeErr');
   const btn = document.getElementById('verifyBtn');
+  if (this._verifying) return;            // evita doble envío (auto-submit + click)
   const showErr = (m) => { if (err) { err.textContent = m; err.classList.remove('hidden'); } else this.toast(m); };
   if (err) err.classList.add('hidden');
 
   if (!/^\d{6}$/.test(String(code))) { showErr('Ingresá los 6 dígitos del código.'); return; }
 
   if (this.auth.enabled) {
-    if (btn) { btn.disabled = true; btn.textContent = 'Verificando…'; }
+    this._verifying = true;
+    if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Verificando…'; }
     try {
       const user = await this.auth.verifyCode(this.user.email, code);
       await this.auth.saveProfile(user, this.user);
     } catch (ex) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Confirmar registro →'; }
+      this._verifying = false;
+      if (btn) { btn.disabled = false; btn.classList.remove('loading'); btn.textContent = 'Confirmar registro →'; }
       showErr(this.auth.friendly(ex));
+      this._resetOtp();
       return;
     }
+    this._verifying = false;
   }
 
   this.user.verified = true;
