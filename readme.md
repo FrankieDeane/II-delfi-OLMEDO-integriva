@@ -46,7 +46,24 @@ Botón **"Reiniciar demo"** (arriba a la derecha) borra todo y empieza de cero.
 - `app.js` — toda la lógica y las pantallas
 - `serve.ps1` — servidor local opcional (solo para previsualizar; no hace falta para usarlo)
 
+## Login y verificación por email (REAL, con Supabase)
+
+El registro ya **no** usa un código de mentira: envía un **código de 6 dígitos al correo de verdad** usando [Supabase Auth](https://supabase.com) (OTP por email). Para activarlo:
+
+1. **Creá un proyecto gratis** en https://supabase.com.
+2. **Cargá la base de datos:** panel → *SQL Editor* → pegá el contenido de `supabase/schema.sql` → *Run*.
+3. **Pegá tus credenciales** en `config.js`:
+   - panel → *Project Settings → API* → copiá *Project URL* y la clave *anon public*.
+   - (La clave `anon` es pública, va en el navegador. Nunca pegues la `service_role`.)
+4. **Hacé que el email lleve el CÓDIGO** (y no un link):
+   panel → *Authentication → Email Templates → Magic Link* → reemplazá el cuerpo por uno que muestre `{{ .Token }}` (ej.: *"Tu código de Integriva es: {{ .Token }}"*).
+5. **Confirmá el remitente:** *Authentication → Providers → Email* tiene que estar habilitado.
+
+> **Emails:** el mailer por defecto de Supabase sirve para **probar** (pocos envíos, puede caer en spam). Para producción conviene un **SMTP propio** (ej. **Resend**, gratis hasta cierto volumen): *Project Settings → Authentication → SMTP Settings*. Así los emails llegan confiables y con tu dominio.
+
+Si `config.js` no tiene credenciales, la app sigue abriéndose en **modo demo** (no envía emails y lo avisa en pantalla).
+
 ## Si más adelante querés la versión REAL (en producción)
-Habría que sumar: backend con base de datos, login real, **Mercado Pago de verdad** (cuenta + credenciales), recetas/cálculos validados por nutricionista, y hosting. Conviene hacerlo *después* de validar la idea con este prototipo.
+Ya tenés **login real** (arriba). Falta sumar: **Mercado Pago de verdad** (cuenta + credenciales), recetas/cálculos validados por nutricionista, y hosting. Conviene hacerlo *después* de validar la idea con este prototipo.
 
 > ⚠️ Los cálculos de calorías son orientativos y educativos. La versión real debería contar con la revisión de un/a nutricionista, y los contenidos psicológicos con tu criterio profesional.

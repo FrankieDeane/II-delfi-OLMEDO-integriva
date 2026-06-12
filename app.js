@@ -34,6 +34,7 @@ const App = {
   reset() {
     if (!confirm('¿Borrar todos los datos de prueba y empezar de cero?')) return;
     ['nm_user','nm_membership','nm_prefs','nm_logs','nm_extras','nm_cookies'].forEach(k => localStorage.removeItem(k));
+    if (this.auth && this.auth.enabled) { this.auth.signOut().finally(() => location.reload()); return; }
     location.reload();
   },
 
@@ -122,6 +123,7 @@ const App = {
      ============================================================ */
   init() {
     this.load();
+    this.auth.init();
     this.selDate = this.todayKey();
     this.calMonth = new Date();
     // Reanudar donde corresponde
@@ -129,6 +131,126 @@ const App = {
       this.go(this.prefs ? 'dashboard' : 'onboarding');
     } else {
       this.go('landing');
+    }
+  },
+};
+
+/* ============================================================
+   AUTENTICACIÓN REAL (Supabase Auth · OTP por email)
+   ------------------------------------------------------------
+   - signInWithOtp  → envía un código de 6 dígitos al correo.
+   - verifyOtp      → valida ese código y abre la sesión.
+   Si no hay credenciales en config.js, queda en "modo demo"
+   (no envía emails) y la pantalla de verificación lo avisa.
+   ============================================================ */
+App.auth = {
+  client: null,
+  enabled: false,
+  RESEND_COOLDOWN: 60,   // segundos entre reenvíos
+  MAX_RESENDS: 5,        // tope de reenvíos por sesión de registro
+  lastSentAt: 0,
+  resendCount: 0,
+
+  init() {
+    const cfg = window.INTEGRIVA_CONFIG || {};
+    const ready = window.supabase &&
+      cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
+      !String(cfg.SUPABASE_URL).startsWith('PEGAR_');
+    if (ready) {
+      this.client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+      this.enabled = true;
+    } else {
+      console.warn('[Integriva] Supabase no configurado (config.js). El envío real de emails está desactivado.');
+    }
+  },
+
+  // Envía (o reenvía) el código de 6 dígitos al email.
+  async sendCode(email, meta, { isResend = false } = {}) {
+    if (!this.enabled) throw { code: 'no_config' };
+
+    // Tope de reenvíos del lado del cliente (UX clara, no de seguridad).
+    if (isResend) {
+      const waited = (Date.now() - this.lastSentAt) / 1000;
+      if (this.resendCount >= this.MAX_RESENDS) throw { code: 'too_many' };
+      if (waited < this.RESEND_COOLDOWN) {
+        throw { code: 'cooldown', seconds: Math.ceil(this.RESEND_COOLDOWN - waited) };
+      }
+    }
+
+    const { error } = await this.client.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: true, data: meta },
+    });
+    if (error) throw this.normalize(error);
+
+    this.lastSentAt = Date.now();
+    if (isResend) this.resendCount++;
+  },
+
+  // Valida el código y abre sesión. Devuelve el usuario de Supabase.
+  async verifyCode(email, token) {
+    if (!this.enabled) throw { code: 'no_config' };
+    const { data, error } = await this.client.auth.verifyOtp({ email, token, type: 'email' });
+    if (error) throw this.normalize(error);
+    return data.user;
+  },
+
+  // Guarda/actualiza el perfil en la tabla profiles (best-effort).
+  async saveProfile(user, u) {
+    if (!this.enabled || !user) return;
+    try {
+      await this.client.from('profiles').upsert({
+        id: user.id,
+        email: u.email,
+        nombre: u.nombre,
+        edad: u.edad,
+        sexo: u.sexo,
+        peso: u.peso,
+        peso_deseado: u.pesoDeseado,
+        altura: u.altura,
+        actividad: u.actividad,
+        acepta_terminos: !!u.acepta,
+        cal_objetivo: u.cal ? u.cal.objetivo : null,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('[Integriva] No se pudo guardar el perfil:', e);
+    }
+  },
+
+  async signOut() {
+    if (this.enabled) { try { await this.client.auth.signOut(); } catch (e) {} }
+  },
+
+  // Traduce el error de Supabase a un código simple + mensaje en español.
+  normalize(error) {
+    const msg = (error && error.message ? error.message : '').toLowerCase();
+    const status = error && error.status;
+    if (status === 429 || msg.includes('rate limit') || msg.includes('for security purposes')) {
+      return { code: 'too_many', message: error.message };
+    }
+    if (msg.includes('expired')) return { code: 'expired', message: error.message };
+    if (msg.includes('invalid') || msg.includes('token')) return { code: 'invalid', message: error.message };
+    if (msg.includes('already registered') || msg.includes('already been registered')) {
+      return { code: 'duplicate', message: error.message };
+    }
+    if (msg.includes('smtp') || msg.includes('send') || msg.includes('email')) {
+      return { code: 'send_failed', message: error.message };
+    }
+    return { code: 'unknown', message: error && error.message };
+  },
+
+  // Mensaje amable para el usuario según el código de error.
+  friendly(err) {
+    switch (err && err.code) {
+      case 'no_config':   return 'El envío de emails todavía no está configurado. Avisale a quien administra Integriva.';
+      case 'invalid':     return 'El código no es válido. Revisá los 6 dígitos del email.';
+      case 'expired':     return 'El código expiró. Tocá "Reenviar email" para recibir uno nuevo.';
+      case 'cooldown':    return `Esperá ${err.seconds||60} segundos antes de pedir otro código.`;
+      case 'too_many':    return 'Demasiados intentos. Esperá unos minutos y volvé a probar.';
+      case 'send_failed': return 'No pudimos enviar el email. Revisá la dirección e intentá de nuevo.';
+      case 'duplicate':   return 'Ya existe una cuenta con este email. Te enviamos un código para ingresar.';
+      default:            return 'Ocurrió un problema. Intentá de nuevo en un momento.';
     }
   },
 };
@@ -246,42 +368,32 @@ App.screens = {
     </div>`;
   },
 
-  /* ---------------- VERIFICACIÓN DE EMAIL (simulada) ---------------- */
+  /* ---------------- VERIFICACIÓN DE EMAIL (OTP real) ---------------- */
   verificar() {
     const u = this.user;
+    const demo = !this.auth.enabled;
     return `
     <div class="wrap narrow">
+      <button class="link" onclick="App.go('registro')">← Volver</button>
       <div class="card center" style="margin-top:14px">
         <div style="font-size:3rem">📩</div>
         <h2>Revisá tu correo</h2>
-        <p class="muted" style="max-width:34em;margin:0 auto 6px">Para activar tu cuenta y proteger tus datos, te enviamos un email a <b>${u.email}</b>. Confirmá tu registro para continuar.</p>
+        <p class="muted" style="max-width:34em;margin:0 auto 6px">Te enviamos un código de 6 dígitos a <b>${u.email}</b>. Ingresalo abajo para activar tu cuenta y proteger tus datos.</p>
+        <p class="muted" style="font-size:.84rem;margin-top:6px">Puede tardar un minuto. Si no aparece, revisá la carpeta de <b>spam</b> o correo no deseado.</p>
       </div>
 
-      <!-- Email simulado (en la versión real, llega a la bandeja del usuario) -->
       <div class="card">
-        <div class="email-sim">
-          <div class="head">📨 Bandeja de entrada · de <b>Integriva</b> · para ${u.email}</div>
-          <div class="body">
-            <div class="hero-brand-top" style="justify-content:center;font-size:1.2rem;margin-bottom:14px">
-              <span class="logo-dot"></span> Integriva
-            </div>
-            <h3>¡Hola, ${u.nombre}! 👋</h3>
-            <p class="muted" style="font-size:.92rem">Confirmá que este correo es tuyo para activar tu cuenta. Tu código de verificación es:</p>
-            <div class="code">${u.verifyCode}</div>
-            <p class="muted" style="font-size:.82rem;margin:12px 0">Ingresalo abajo, o tocá el botón para confirmar directo.</p>
-            <button class="btn block" onclick="App.verifyAccount(App.user.verifyCode)">Verificar mi cuenta ✓</button>
-          </div>
-        </div>
-
-        <div style="margin-top:18px">
-          <div class="field"><label>Ingresá el código de 6 dígitos</label>
-            <input id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:.3em;text-align:center;font-size:1.2rem"></div>
-          <div id="codeErr" class="error hidden"></div>
-          <button class="btn block big" onclick="App.verifyAccount(document.getElementById('codeInput').value.trim())">Confirmar registro →</button>
-          <p class="muted center" style="font-size:.84rem;margin-top:12px">¿No te llegó? <button class="link" onclick="App.resendCode()">Reenviar email</button></p>
-        </div>
+        <div class="field"><label for="codeInput">Código de verificación</label>
+          <input id="codeInput" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                 aria-label="Código de 6 dígitos" placeholder="••••••"
+                 style="letter-spacing:.3em;text-align:center;font-size:1.4rem"></div>
+        <div id="codeErr" class="error hidden" role="alert"></div>
+        <button id="verifyBtn" class="btn block big" onclick="App.verifyAccount(document.getElementById('codeInput').value.trim())">Confirmar registro →</button>
+        <p class="muted center" style="font-size:.84rem;margin-top:14px">¿No te llegó?
+          <button id="resendBtn" class="link" onclick="App.resendCode()">Reenviar email</button></p>
       </div>
-      <p class="muted center" style="font-size:.78rem">🔒 Simulación de prueba: en la versión real, el código llega a tu correo de verdad. Acá te lo mostramos arriba.</p>
+      ${demo ? `<p class="muted center" style="font-size:.82rem">⚠️ Modo demo: el envío de emails no está configurado.
+        Cargá las credenciales de Supabase en <b>config.js</b> para que el código llegue de verdad.</p>` : ''}
     </div>`;
   },
 
@@ -586,18 +698,39 @@ App.screens = {
    ============================================================ */
 App.afterRender = {
   registro() {
-    document.getElementById('regForm').addEventListener('submit', (e) => {
+    document.getElementById('regForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target, d = Object.fromEntries(new FormData(f));
       ['edad','peso','pesoDeseado','altura'].forEach(k => d[k] = parseFloat(d[k]));
       const err = document.getElementById('regErr');
-      if (!d.sexo) { err.textContent='Elegí una opción de sexo.'; err.classList.remove('hidden'); return; }
-      if (d.peso<30||d.altura<120) { err.textContent='Revisá los valores de peso y altura.'; err.classList.remove('hidden'); return; }
-      if (!d.acepta) { err.textContent='Para continuar necesitás aceptar las Condiciones de cuidado y privacidad.'; err.classList.remove('hidden'); return; }
+      const showErr = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+      err.classList.add('hidden');
+      if (!d.sexo) { showErr('Elegí una opción de sexo.'); return; }
+      if (d.peso<30||d.altura<120) { showErr('Revisá los valores de peso y altura.'); return; }
+      if (!d.acepta) { showErr('Para continuar necesitás aceptar las Condiciones de cuidado y privacidad.'); return; }
       d.acepta = true;
       d.cal = App.calcCalories(d);
       d.verified = false;
-      d.verifyCode = String(Math.floor(100000 + Math.random()*900000)); // código simulado de 6 dígitos
+
+      const btn = f.querySelector('button[type="submit"]');
+      btn.disabled = true; btn.textContent = 'Enviando código…';
+
+      // Reiniciamos el contador de reenvíos para este registro.
+      App.auth.resendCount = 0; App.auth.lastSentAt = 0;
+
+      if (App.auth.enabled) {
+        try {
+          await App.auth.sendCode(d.email, {
+            nombre: d.nombre, edad: d.edad, sexo: d.sexo, peso: d.peso,
+            pesoDeseado: d.pesoDeseado, altura: d.altura, actividad: d.actividad,
+            acepta: true, cal: d.cal ? d.cal.objetivo : null,
+          });
+        } catch (ex) {
+          btn.disabled = false; btn.textContent = 'Calcular mis calorías →';
+          showErr(App.auth.friendly(ex));
+          return;
+        }
+      }
       App.user = d; App.save();
       App.go('verificar');
     });
@@ -616,23 +749,54 @@ App.afterRender = {
 /* ============================================================
    ACCIONES
    ============================================================ */
-App.verifyAccount = function(code) {
+App.verifyAccount = async function(code) {
   const err = document.getElementById('codeErr');
-  if (String(code) !== String(this.user.verifyCode)) {
-    if (err) { err.textContent = 'El código no coincide. Revisá los 6 dígitos.'; err.classList.remove('hidden'); }
-    else this.toast('El código no coincide');
-    return;
+  const btn = document.getElementById('verifyBtn');
+  const showErr = (m) => { if (err) { err.textContent = m; err.classList.remove('hidden'); } else this.toast(m); };
+  if (err) err.classList.add('hidden');
+
+  if (!/^\d{6}$/.test(String(code))) { showErr('Ingresá los 6 dígitos del código.'); return; }
+
+  if (this.auth.enabled) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Verificando…'; }
+    try {
+      const user = await this.auth.verifyCode(this.user.email, code);
+      await this.auth.saveProfile(user, this.user);
+    } catch (ex) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Confirmar registro →'; }
+      showErr(this.auth.friendly(ex));
+      return;
+    }
   }
+
   this.user.verified = true;
   this.save();
   this.toast('¡Cuenta verificada! ✓');
   this.go('calorias');
 };
-App.resendCode = function() {
-  this.user.verifyCode = String(Math.floor(100000 + Math.random()*900000));
-  this.save();
-  this.toast('📩 Te reenviamos el email con un código nuevo');
-  this.go('verificar');
+
+App.resendCode = async function() {
+  const err = document.getElementById('codeErr');
+  const link = document.getElementById('resendBtn');
+  const showErr = (m) => { if (err) { err.textContent = m; err.classList.remove('hidden'); } else this.toast(m); };
+  if (err) err.classList.add('hidden');
+
+  if (!this.auth.enabled) { this.toast('⚠️ Configurá Supabase en config.js para enviar emails reales'); return; }
+
+  if (link) { link.disabled = true; link.textContent = 'Enviando…'; }
+  try {
+    await this.auth.sendCode(this.user.email, {
+      nombre: this.user.nombre, edad: this.user.edad, sexo: this.user.sexo,
+      peso: this.user.peso, pesoDeseado: this.user.pesoDeseado, altura: this.user.altura,
+      actividad: this.user.actividad, acepta: true,
+      cal: this.user.cal ? this.user.cal.objetivo : null,
+    }, { isResend: true });
+    this.toast('📩 Te reenviamos el email con un código nuevo');
+  } catch (ex) {
+    showErr(this.auth.friendly(ex));
+  } finally {
+    if (link) { link.disabled = false; link.textContent = 'Reenviar email'; }
+  }
 };
 
 App.procesarPago = function() {
