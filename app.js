@@ -91,7 +91,7 @@ const App = {
   /* ============================================================
      NAVEGACIÓN
      ============================================================ */
-  go(screen) {
+  go(screen, opts = {}) {
     this.screen = screen;
     const app = document.getElementById('app');
     const topbar = document.getElementById('topbar');
@@ -107,9 +107,26 @@ const App = {
     app.firstElementChild && app.firstElementChild.classList.add('fade-in');
     if (this.afterRender[screen]) this.afterRender[screen].call(this);
 
+    // La pantalla de verificación tiene su propia URL: /verificacion
+    this.syncUrl(screen, opts);
+
     // Banner de cookies: al entrar a la página principal (post pago), si todavía no decidió
     if (['onboarding','dashboard'].includes(screen) && !this.cookies) this.showCookieBanner();
     else this.hideCookieBanner();
+  },
+
+  // Mantiene la URL en sintonía con la pantalla (solo /verificacion tiene ruta propia).
+  VERIF_PATH: '/verificacion',
+  onVerifPath() { return location.pathname.replace(/\/+$/, '') === this.VERIF_PATH; },
+  syncUrl(screen, opts = {}) {
+    if (opts.fromPop) return;
+    try {
+      if (screen === 'verificar' && !this.onVerifPath()) {
+        history.pushState({ screen: 'verificar' }, '', this.VERIF_PATH);
+      } else if (screen !== 'verificar' && this.onVerifPath()) {
+        history.replaceState({ screen }, '', '/');
+      }
+    } catch (e) { /* entornos sin History API */ }
   },
 
   renderNav() {
@@ -126,6 +143,21 @@ const App = {
     this.auth.init();
     this.selDate = this.todayKey();
     this.calMonth = new Date();
+
+    // Botón atrás/adelante del navegador (entre /verificacion y el resto)
+    window.addEventListener('popstate', () => {
+      if (this.onVerifPath() && this.user && !this.user.verified) {
+        this.go('verificar', { fromPop: true });
+      } else {
+        this.go(this.user ? 'registro' : 'landing', { fromPop: true });
+      }
+    });
+
+    // Si entran directo a /verificacion con un registro pendiente, mostramos la verificación
+    if (this.onVerifPath() && this.user && !this.user.verified) {
+      this.go('verificar');
+      return;
+    }
     // Reanudar donde corresponde
     if (this.membership && this.membership.active) {
       this.go(this.prefs ? 'dashboard' : 'onboarding');
