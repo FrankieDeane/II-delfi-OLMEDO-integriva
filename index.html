@@ -30,6 +30,33 @@
   <!-- Banner de aviso de prototipo -->
   <div class="proto-banner">Prototipo de demostración · Los pagos son simulados · Los datos se guardan solo en este navegador</div>
 
+  <!-- ============================================================
+       Formularios ocultos para Netlify Forms.
+       El bot de Netlify los detecta en el build (porque están en el
+       HTML estático) y registra los campos. La app, que arma sus
+       formularios con JavaScript, envía las respuestas por AJAX a
+       estos mismos "name" (ver App.submitNetlifyForm en app.js).
+       Así quedan guardadas en el panel de Netlify → Forms.
+       ============================================================ -->
+  <form name="registro" data-netlify="true" netlify-honeypot="bot-field" hidden>
+    <input type="text" name="bot-field" />
+    <input type="text" name="nombre" />
+    <input type="email" name="email" />
+    <input type="number" name="edad" />
+    <input type="text" name="sexo" />
+    <input type="number" name="peso" />
+    <input type="number" name="pesoDeseado" />
+    <input type="number" name="altura" />
+    <input type="text" name="actividad" />
+    <input type="number" name="cal" />
+    <input type="text" name="verificado" />
+  </form>
+  <form name="preferencias" data-netlify="true" netlify-honeypot="bot-field" hidden>
+    <input type="text" name="bot-field" />
+    <input type="email" name="email" />
+    <textarea name="preferencias"></textarea>
+  </form>
+
   <!-- Cliente de Appwrite (auth real por email) + configuración del proyecto -->
   <script src="https://cdn.jsdelivr.net/npm/appwrite@26"></script>
   <script src="config.js"></script>

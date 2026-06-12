@@ -731,6 +731,13 @@ App.afterRender = {
       App.auth.resendCount = 0; App.auth.lastSentAt = 0;
       App.user = d; App.save();   // guardamos local para que persista el userId
 
+      // Registro del lead en Netlify Forms (queda en el panel → Forms).
+      App.submitNetlifyForm('registro', {
+        nombre: d.nombre, email: d.email, edad: d.edad, sexo: d.sexo,
+        peso: d.peso, pesoDeseado: d.pesoDeseado, altura: d.altura,
+        actividad: d.actividad, cal: d.cal ? d.cal.objetivo : '', verificado: 'no',
+      });
+
       if (App.auth.enabled) {
         try {
           await App.auth.sendCode(d.email);
@@ -748,6 +755,10 @@ App.afterRender = {
       e.preventDefault();
       App.prefs = Object.fromEntries(new FormData(e.target));
       App.save();
+      App.submitNetlifyForm('preferencias', {
+        email: (App.user && App.user.email) || '',
+        preferencias: JSON.stringify(App.prefs),
+      });
       App.toast('¡Listo! Tu espacio está personalizado 🎉');
       App.go('dashboard');
     });
@@ -782,6 +793,24 @@ App.afterRender = {
 /* ============================================================
    ACCIONES
    ============================================================ */
+// Guarda la respuesta de un formulario en Netlify Forms (best-effort).
+// En local (file://) o sin Netlify, el POST falla en silencio y no molesta.
+App.submitNetlifyForm = function(formName, data) {
+  try {
+    const body = new URLSearchParams();
+    body.append('form-name', formName);
+    body.append('bot-field', '');
+    Object.entries(data).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) body.append(k, String(v));
+    });
+    fetch('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }).catch(() => {});
+  } catch (e) { /* sin conexión / entorno local: se ignora */ }
+};
+
 App.collectOtp = function() {
   return Array.from(document.querySelectorAll('.otp-box')).map(b => b.value).join('').trim();
 };

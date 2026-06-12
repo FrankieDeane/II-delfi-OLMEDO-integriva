@@ -75,6 +75,15 @@ Para no escribir las claves en el repositorio, en el deploy generamos `config.js
 
 Después *Deploys → Trigger deploy → Clear cache and deploy site*. Acordate de agregar tu dominio `.netlify.app` como *Web platform* en Appwrite (paso 2).
 
+## Registro de formularios (Netlify Forms)
+
+Cada vez que alguien completa el **registro** o el **onboarding de gustos**, la respuesta queda guardada en **Netlify → Forms** (sin programar backend). Funciona así:
+- En `index.html` hay dos formularios ocultos (`registro` y `preferencias`) que Netlify detecta en el deploy.
+- La app envía las respuestas por AJAX a esos mismos nombres (`App.submitNetlifyForm`).
+- Lo ves en *Netlify → tu sitio → Forms*. Podés activar notificaciones por email ahí mismo.
+
+> **Privacidad:** estos formularios guardan datos de salud (edad, peso, altura) en el panel de Netlify. Si querés minimizar, se puede registrar solo nombre+email, o capturar únicamente a los usuarios ya verificados. Avisame y lo ajusto. (Solo funciona en el sitio publicado, no con doble clic local.)
+
 ## Si más adelante querés la versión REAL (en producción)
 Ya tenés **login real** (arriba). Falta sumar: **Mercado Pago de verdad** (cuenta + credenciales), recetas/cálculos validados por nutricionista, y hosting. Conviene hacerlo *después* de validar la idea con este prototipo.
 
