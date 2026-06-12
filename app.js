@@ -136,16 +136,19 @@ const App = {
 };
 
 /* ============================================================
-   AUTENTICACIÓN REAL (Supabase Auth · OTP por email)
+   AUTENTICACIÓN REAL (Appwrite · Email OTP)
    ------------------------------------------------------------
-   - signInWithOtp  → envía un código de 6 dígitos al correo.
-   - verifyOtp      → valida ese código y abre la sesión.
+   - createEmailToken → envía un código de 6 dígitos al correo y
+     devuelve el userId que usamos para verificar.
+   - createSession    → valida ese código y abre la sesión.
+   - updatePrefs      → guarda el perfil (privado de cada usuario).
    Si no hay credenciales en config.js, queda en "modo demo"
    (no envía emails) y la pantalla de verificación lo avisa.
    ============================================================ */
 App.auth = {
-  client: null,
+  account: null,
   enabled: false,
+  pendingUserId: null,   // userId que devuelve createEmailToken
   RESEND_COOLDOWN: 60,   // segundos entre reenvíos
   MAX_RESENDS: 5,        // tope de reenvíos por sesión de registro
   lastSentAt: 0,
@@ -153,19 +156,22 @@ App.auth = {
 
   init() {
     const cfg = window.INTEGRIVA_CONFIG || {};
-    const ready = window.supabase &&
-      cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
-      !String(cfg.SUPABASE_URL).startsWith('PEGAR_');
+    const ready = window.Appwrite &&
+      cfg.APPWRITE_ENDPOINT && cfg.APPWRITE_PROJECT_ID &&
+      !String(cfg.APPWRITE_PROJECT_ID).startsWith('PEGAR_');
     if (ready) {
-      this.client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+      const client = new Appwrite.Client()
+        .setEndpoint(cfg.APPWRITE_ENDPOINT)
+        .setProject(cfg.APPWRITE_PROJECT_ID);
+      this.account = new Appwrite.Account(client);
       this.enabled = true;
     } else {
-      console.warn('[Integriva] Supabase no configurado (config.js). El envío real de emails está desactivado.');
+      console.warn('[Integriva] Appwrite no configurado (config.js). El envío real de emails está desactivado.');
     }
   },
 
   // Envía (o reenvía) el código de 6 dígitos al email.
-  async sendCode(email, meta, { isResend = false } = {}) {
+  async sendCode(email, { isResend = false } = {}) {
     if (!this.enabled) throw { code: 'no_config' };
 
     // Tope de reenvíos del lado del cliente (UX clara, no de seguridad).
@@ -177,41 +183,45 @@ App.auth = {
       }
     }
 
-    const { error } = await this.client.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: true, data: meta },
-    });
-    if (error) throw this.normalize(error);
+    try {
+      // Por si ya había una sesión vieja abierta, la cerramos antes de pedir otra.
+      if (!isResend) { try { await this.account.deleteSession({ sessionId: 'current' }); } catch (e) {} }
+      const token = await this.account.createEmailToken({
+        userId: Appwrite.ID.unique(),
+        email,
+      });
+      this.pendingUserId = token.userId;
+      if (App.user) { App.user.userId = token.userId; App.save(); }
+    } catch (error) {
+      throw this.normalize(error);
+    }
 
     this.lastSentAt = Date.now();
     if (isResend) this.resendCount++;
   },
 
-  // Valida el código y abre sesión. Devuelve el usuario de Supabase.
-  async verifyCode(email, token) {
+  // Valida el código y abre sesión. Devuelve la sesión de Appwrite.
+  async verifyCode(code) {
     if (!this.enabled) throw { code: 'no_config' };
-    const { data, error } = await this.client.auth.verifyOtp({ email, token, type: 'email' });
-    if (error) throw this.normalize(error);
-    return data.user;
+    const userId = this.pendingUserId || (App.user && App.user.userId);
+    if (!userId) throw { code: 'invalid' };
+    try {
+      return await this.account.createSession({ userId, secret: code });
+    } catch (error) {
+      throw this.normalize(error);
+    }
   },
 
-  // Guarda/actualiza el perfil en la tabla profiles (best-effort).
-  async saveProfile(user, u) {
-    if (!this.enabled || !user) return;
+  // Guarda el perfil en las preferencias del usuario (privadas, sin schema).
+  async saveProfile(u) {
+    if (!this.enabled || !u) return;
     try {
-      await this.client.from('profiles').upsert({
-        id: user.id,
-        email: u.email,
-        nombre: u.nombre,
-        edad: u.edad,
-        sexo: u.sexo,
-        peso: u.peso,
-        peso_deseado: u.pesoDeseado,
-        altura: u.altura,
-        actividad: u.actividad,
-        acepta_terminos: !!u.acepta,
-        cal_objetivo: u.cal ? u.cal.objetivo : null,
-        updated_at: new Date().toISOString(),
+      await this.account.updatePrefs({
+        prefs: {
+          nombre: u.nombre, edad: u.edad, sexo: u.sexo, peso: u.peso,
+          pesoDeseado: u.pesoDeseado, altura: u.altura, actividad: u.actividad,
+          acepta: !!u.acepta, calObjetivo: u.cal ? u.cal.objetivo : null,
+        },
       });
     } catch (e) {
       console.warn('[Integriva] No se pudo guardar el perfil:', e);
@@ -219,24 +229,22 @@ App.auth = {
   },
 
   async signOut() {
-    if (this.enabled) { try { await this.client.auth.signOut(); } catch (e) {} }
+    if (this.enabled) { try { await this.account.deleteSession({ sessionId: 'current' }); } catch (e) {} }
   },
 
-  // Traduce el error de Supabase a un código simple + mensaje en español.
+  // Traduce el error de Appwrite a un código simple + mensaje en español.
   normalize(error) {
+    const type = (error && error.type) || '';
+    const code = error && error.code;
     const msg = (error && error.message ? error.message : '').toLowerCase();
-    const status = error && error.status;
-    if (status === 429 || msg.includes('rate limit') || msg.includes('for security purposes')) {
-      return { code: 'too_many', message: error.message };
+    if (code === 429 || type.includes('rate_limit')) return { code: 'too_many', message: error && error.message };
+    if (type.includes('invalid_token') || msg.includes('invalid token') || msg.includes('expired') || code === 401) {
+      return { code: 'invalid', message: error && error.message };
     }
-    if (msg.includes('expired')) return { code: 'expired', message: error.message };
-    if (msg.includes('invalid') || msg.includes('token')) return { code: 'invalid', message: error.message };
-    if (msg.includes('already registered') || msg.includes('already been registered')) {
-      return { code: 'duplicate', message: error.message };
+    if (type.includes('user_already') || type.includes('user_email_already')) {
+      return { code: 'duplicate', message: error && error.message };
     }
-    if (msg.includes('smtp') || msg.includes('send') || msg.includes('email')) {
-      return { code: 'send_failed', message: error.message };
-    }
+    if (type.includes('smtp') || code === 500) return { code: 'send_failed', message: error && error.message };
     return { code: 'unknown', message: error && error.message };
   },
 
@@ -244,7 +252,7 @@ App.auth = {
   friendly(err) {
     switch (err && err.code) {
       case 'no_config':   return 'El envío de emails todavía no está configurado. Avisale a quien administra Integriva.';
-      case 'invalid':     return 'El código no es válido. Revisá los 6 dígitos del email.';
+      case 'invalid':     return 'El código no es válido o expiró. Tocá "Reenviar email" para pedir uno nuevo.';
       case 'expired':     return 'El código expiró. Tocá "Reenviar email" para recibir uno nuevo.';
       case 'cooldown':    return `Esperá ${err.seconds||60} segundos antes de pedir otro código.`;
       case 'too_many':    return 'Demasiados intentos. Esperá unos minutos y volvé a probar.';
@@ -397,7 +405,7 @@ App.screens = {
       </div>
       <p class="auth-secure center">🔒 Tus datos de salud viajan cifrados y solo vos podés verlos.</p>
       ${demo ? `<p class="muted center" style="font-size:.82rem">⚠️ Modo demo: el envío de emails no está configurado.
-        Cargá las credenciales de Supabase en <b>config.js</b> para que el código llegue de verdad.</p>` : ''}
+        Cargá las credenciales de Appwrite en <b>config.js</b> para que el código llegue de verdad.</p>` : ''}
     </div>`;
   },
 
@@ -717,25 +725,21 @@ App.afterRender = {
       d.verified = false;
 
       const btn = f.querySelector('button[type="submit"]');
-      btn.disabled = true; btn.textContent = 'Enviando código…';
+      btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Enviando código…';
 
       // Reiniciamos el contador de reenvíos para este registro.
       App.auth.resendCount = 0; App.auth.lastSentAt = 0;
+      App.user = d; App.save();   // guardamos local para que persista el userId
 
       if (App.auth.enabled) {
         try {
-          await App.auth.sendCode(d.email, {
-            nombre: d.nombre, edad: d.edad, sexo: d.sexo, peso: d.peso,
-            pesoDeseado: d.pesoDeseado, altura: d.altura, actividad: d.actividad,
-            acepta: true, cal: d.cal ? d.cal.objetivo : null,
-          });
+          await App.auth.sendCode(d.email);
         } catch (ex) {
-          btn.disabled = false; btn.textContent = 'Calcular mis calorías →';
+          btn.disabled = false; btn.classList.remove('loading'); btn.textContent = 'Calcular mis calorías →';
           showErr(App.auth.friendly(ex));
           return;
         }
       }
-      App.user = d; App.save();
       App.go('verificar');
     });
   },
@@ -800,8 +804,8 @@ App.verifyAccount = async function(code) {
     this._verifying = true;
     if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Verificando…'; }
     try {
-      const user = await this.auth.verifyCode(this.user.email, code);
-      await this.auth.saveProfile(user, this.user);
+      await this.auth.verifyCode(code);
+      await this.auth.saveProfile(this.user);
     } catch (ex) {
       this._verifying = false;
       if (btn) { btn.disabled = false; btn.classList.remove('loading'); btn.textContent = 'Confirmar registro →'; }
@@ -824,16 +828,11 @@ App.resendCode = async function() {
   const showErr = (m) => { if (err) { err.textContent = m; err.classList.remove('hidden'); } else this.toast(m); };
   if (err) err.classList.add('hidden');
 
-  if (!this.auth.enabled) { this.toast('⚠️ Configurá Supabase en config.js para enviar emails reales'); return; }
+  if (!this.auth.enabled) { this.toast('⚠️ Configurá Appwrite en config.js para enviar emails reales'); return; }
 
   if (link) { link.disabled = true; link.textContent = 'Enviando…'; }
   try {
-    await this.auth.sendCode(this.user.email, {
-      nombre: this.user.nombre, edad: this.user.edad, sexo: this.user.sexo,
-      peso: this.user.peso, pesoDeseado: this.user.pesoDeseado, altura: this.user.altura,
-      actividad: this.user.actividad, acepta: true,
-      cal: this.user.cal ? this.user.cal.objetivo : null,
-    }, { isResend: true });
+    await this.auth.sendCode(this.user.email, { isResend: true });
     this.toast('📩 Te reenviamos el email con un código nuevo');
   } catch (ex) {
     showErr(this.auth.friendly(ex));
