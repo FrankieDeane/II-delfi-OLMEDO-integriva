@@ -4,3 +4,10 @@
 [build]
   command = "bash generate-config.sh"
   publish = "."
+
+# SPA fallback: cualquier ruta (ej. /verificacion) sirve index.html y la app
+# resuelve la pantalla. Los archivos reales (styles.css, app.js…) se sirven igual.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
