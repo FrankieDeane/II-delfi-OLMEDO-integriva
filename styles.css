@@ -280,3 +280,88 @@ button { font-family: inherit; cursor: pointer; border: none; }
 
 .fade-in { animation: fade .35s ease; }
 @keyframes fade { from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;} }
+
+/* ============================================================
+   PREMIUM — verificación / auth, fondo y micro-interacciones
+   ============================================================ */
+
+/* Fondo cálido con un velo suave (no plano, no frío) */
+body {
+  background:
+    radial-gradient(1100px 520px at 12% -8%, rgba(194,195,149,.22), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(221,186,174,.20), transparent 55%),
+    var(--crema);
+  background-attachment: fixed;
+}
+
+/* Tarjeta de autenticación: glass cálido + borde luminoso */
+.auth-card {
+  position: relative;
+  max-width: 480px; margin: 14px auto 0;
+  padding: 34px 30px 30px;
+  border-radius: 26px;
+  background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,250,242,.92));
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,.7);
+  box-shadow: 0 22px 60px rgba(90,78,54,.16), 0 2px 0 rgba(255,255,255,.8) inset;
+  animation: rise .45s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes rise { from{opacity:0; transform:translateY(16px) scale(.98);} to{opacity:1; transform:none;} }
+
+.auth-badge {
+  width: 76px; height: 76px; margin: 0 auto 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2.2rem; border-radius: 50%;
+  background: radial-gradient(circle at 30% 25%, var(--honey), var(--verde-claro));
+  box-shadow: 0 10px 26px rgba(111,113,64,.22), 0 0 0 8px rgba(234,235,214,.5);
+  animation: pulseSoft 2.6s ease-in-out infinite;
+}
+@keyframes pulseSoft { 0%,100%{box-shadow:0 10px 26px rgba(111,113,64,.22),0 0 0 8px rgba(234,235,214,.5);} 50%{box-shadow:0 12px 30px rgba(111,113,64,.28),0 0 0 12px rgba(234,235,214,.35);} }
+
+.auth-email {
+  font-weight: 800; color: var(--verde-osc); font-size: 1.02rem;
+  word-break: break-all; margin-top: 2px;
+}
+.auth-secure { color: var(--gris); font-size: .8rem; font-weight: 700; margin-top: 14px; }
+
+/* OTP — 6 casillas tipo app premium */
+.otp-group { display: flex; gap: 10px; justify-content: center; margin: 24px 0 4px; }
+.otp-box {
+  width: 52px; height: 62px; text-align: center;
+  font-family: 'Fraunces', serif; font-size: 1.7rem; font-weight: 600; color: var(--verde-osc);
+  border: 2px solid var(--gris-claro); border-radius: 16px;
+  background: var(--blanco); transition: .16s ease;
+  -moz-appearance: textfield;
+}
+.otp-box::-webkit-outer-spin-button, .otp-box::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.otp-box:focus {
+  outline: none; border-color: var(--verde);
+  box-shadow: 0 0 0 4px var(--verde-claro); transform: translateY(-2px);
+}
+.otp-box:not(:placeholder-shown), .otp-box:valid { border-color: var(--avocado); }
+@media (max-width: 420px) { .otp-group { gap: 7px; } .otp-box { width: 44px; height: 56px; font-size: 1.45rem; } }
+
+/* Botón: brillo sutil al pasar + estado "loading" con spinner */
+.btn { position: relative; overflow: hidden; }
+.btn::after {
+  content: ""; position: absolute; top: 0; left: -120%; width: 60%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.28), transparent);
+  transition: left .55s ease;
+}
+.btn:hover::after { left: 130%; }
+.btn.loading { color: transparent; }
+.btn.loading::before {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 20px; height: 20px; margin: -10px 0 0 -10px;
+  border: 2.5px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Tarjetas con un realce un poco más rico al pasar */
+.feature.card, .price-card { transition: transform .2s ease, box-shadow .2s ease; }
+.feature.card:hover { transform: translateY(-4px); box-shadow: var(--sombra-fuerte); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

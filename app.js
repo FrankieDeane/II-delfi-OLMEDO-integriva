@@ -34,6 +34,7 @@ const App = {
   reset() {
     if (!confirm('¿Borrar todos los datos de prueba y empezar de cero?')) return;
     ['nm_user','nm_membership','nm_prefs','nm_logs','nm_extras','nm_cookies'].forEach(k => localStorage.removeItem(k));
+    if (this.auth && this.auth.enabled) { this.auth.signOut().finally(() => location.reload()); return; }
     location.reload();
   },
 
@@ -122,6 +123,7 @@ const App = {
      ============================================================ */
   init() {
     this.load();
+    this.auth.init();
     this.selDate = this.todayKey();
     this.calMonth = new Date();
     // Reanudar donde corresponde
@@ -129,6 +131,134 @@ const App = {
       this.go(this.prefs ? 'dashboard' : 'onboarding');
     } else {
       this.go('landing');
+    }
+  },
+};
+
+/* ============================================================
+   AUTENTICACIÓN REAL (Appwrite · Email OTP)
+   ------------------------------------------------------------
+   - createEmailToken → envía un código de 6 dígitos al correo y
+     devuelve el userId que usamos para verificar.
+   - createSession    → valida ese código y abre la sesión.
+   - updatePrefs      → guarda el perfil (privado de cada usuario).
+   Si no hay credenciales en config.js, queda en "modo demo"
+   (no envía emails) y la pantalla de verificación lo avisa.
+   ============================================================ */
+App.auth = {
+  account: null,
+  enabled: false,
+  pendingUserId: null,   // userId que devuelve createEmailToken
+  RESEND_COOLDOWN: 60,   // segundos entre reenvíos
+  MAX_RESENDS: 5,        // tope de reenvíos por sesión de registro
+  lastSentAt: 0,
+  resendCount: 0,
+
+  init() {
+    const cfg = window.INTEGRIVA_CONFIG || {};
+    const ready = window.Appwrite &&
+      cfg.APPWRITE_ENDPOINT && cfg.APPWRITE_PROJECT_ID &&
+      !String(cfg.APPWRITE_PROJECT_ID).startsWith('PEGAR_');
+    if (ready) {
+      const client = new Appwrite.Client()
+        .setEndpoint(cfg.APPWRITE_ENDPOINT)
+        .setProject(cfg.APPWRITE_PROJECT_ID);
+      this.account = new Appwrite.Account(client);
+      this.enabled = true;
+    } else {
+      console.warn('[Integriva] Appwrite no configurado (config.js). El envío real de emails está desactivado.');
+    }
+  },
+
+  // Envía (o reenvía) el código de 6 dígitos al email.
+  async sendCode(email, { isResend = false } = {}) {
+    if (!this.enabled) throw { code: 'no_config' };
+
+    // Tope de reenvíos del lado del cliente (UX clara, no de seguridad).
+    if (isResend) {
+      const waited = (Date.now() - this.lastSentAt) / 1000;
+      if (this.resendCount >= this.MAX_RESENDS) throw { code: 'too_many' };
+      if (waited < this.RESEND_COOLDOWN) {
+        throw { code: 'cooldown', seconds: Math.ceil(this.RESEND_COOLDOWN - waited) };
+      }
+    }
+
+    try {
+      // Por si ya había una sesión vieja abierta, la cerramos antes de pedir otra.
+      if (!isResend) { try { await this.account.deleteSession({ sessionId: 'current' }); } catch (e) {} }
+      const token = await this.account.createEmailToken({
+        userId: Appwrite.ID.unique(),
+        email,
+      });
+      this.pendingUserId = token.userId;
+      if (App.user) { App.user.userId = token.userId; App.save(); }
+    } catch (error) {
+      throw this.normalize(error);
+    }
+
+    this.lastSentAt = Date.now();
+    if (isResend) this.resendCount++;
+  },
+
+  // Valida el código y abre sesión. Devuelve la sesión de Appwrite.
+  async verifyCode(code) {
+    if (!this.enabled) throw { code: 'no_config' };
+    const userId = this.pendingUserId || (App.user && App.user.userId);
+    if (!userId) throw { code: 'invalid' };
+    try {
+      return await this.account.createSession({ userId, secret: code });
+    } catch (error) {
+      throw this.normalize(error);
+    }
+  },
+
+  // Guarda el perfil en las preferencias del usuario (privadas, sin schema).
+  async saveProfile(u) {
+    if (!this.enabled || !u) return;
+    try {
+      await this.account.updatePrefs({
+        prefs: {
+          nombre: u.nombre, edad: u.edad, sexo: u.sexo, peso: u.peso,
+          pesoDeseado: u.pesoDeseado, altura: u.altura, actividad: u.actividad,
+          acepta: !!u.acepta, calObjetivo: u.cal ? u.cal.objetivo : null,
+        },
+      });
+    } catch (e) {
+      console.warn('[Integriva] No se pudo guardar el perfil:', e);
+    }
+  },
+
+  async signOut() {
+    if (this.enabled) { try { await this.account.deleteSession({ sessionId: 'current' }); } catch (e) {} }
+  },
+
+  // Traduce el error de Appwrite a un código simple + mensaje en español.
+  normalize(error) {
+    const type = (error && error.type) || '';
+    const code = error && error.code;
+    const msg = (error && error.message ? error.message : '').toLowerCase();
+    if (code === 429 || type.includes('rate_limit')) return { code: 'too_many', message: error && error.message };
+    if (type.includes('invalid_token') || msg.includes('invalid token') || msg.includes('expired') || code === 401) {
+      return { code: 'invalid', message: error && error.message };
+    }
+    if (type.includes('user_already') || type.includes('user_email_already')) {
+      return { code: 'duplicate', message: error && error.message };
+    }
+    if (type.includes('smtp') || code === 500) return { code: 'send_failed', message: error && error.message };
+    return { code: 'unknown', message: error && error.message };
+  },
+
+  // Mensaje amable para el usuario según el código de error.
+  friendly(err) {
+    switch (err && err.code) {
+      case 'no_config':   return 'El envío de emails todavía no está configurado. Avisale a quien administra Integriva.';
+      case 'invalid':     return 'El código no es válido o expiró. Tocá "Reenviar email" para pedir uno nuevo.';
+      case 'expired':     return 'El código expiró. Tocá "Reenviar email" para recibir uno nuevo.';
+      case 'cooldown':    return `Esperá ${err.seconds||60} segundos antes de pedir otro código.`;
+      case 'too_many':    return 'Demasiados intentos. Esperá unos minutos y volvé a probar.';
+      case 'send_failed': return 'No pudimos enviar el email. Revisá la dirección e intentá de nuevo.';
+      case 'duplicate':   return 'Ya existe una cuenta con este email. Te enviamos un código para ingresar.';
+      default:            return 'Ocurrió un problema. Intentá de nuevo en un momento.';
     }
   },
 };
@@ -246,42 +376,36 @@ App.screens = {
     </div>`;
   },
 
-  /* ---------------- VERIFICACIÓN DE EMAIL (simulada) ---------------- */
+  /* ---------------- VERIFICACIÓN DE EMAIL (OTP real) ---------------- */
   verificar() {
     const u = this.user;
+    const demo = !this.auth.enabled;
+    const boxes = Array.from({length:6}, (_,i) =>
+      `<input class="otp-box" data-i="${i}" inputmode="numeric" maxlength="1"
+              aria-label="Dígito ${i+1} de 6" autocomplete="${i===0?'one-time-code':'off'}">`).join('');
     return `
     <div class="wrap narrow">
-      <div class="card center" style="margin-top:14px">
-        <div style="font-size:3rem">📩</div>
+      <button class="link" onclick="App.go('registro')">← Volver</button>
+      <div class="auth-card card center" style="margin-top:14px">
+        <div class="auth-badge">📩</div>
         <h2>Revisá tu correo</h2>
-        <p class="muted" style="max-width:34em;margin:0 auto 6px">Para activar tu cuenta y proteger tus datos, te enviamos un email a <b>${u.email}</b>. Confirmá tu registro para continuar.</p>
-      </div>
+        <p class="muted" style="max-width:34em;margin:0 auto 4px">Te enviamos un código de 6 dígitos a</p>
+        <p class="auth-email">${u.email}</p>
+        <p class="muted" style="font-size:.84rem;margin-top:10px">Puede tardar un minuto. Si no aparece, mirá la carpeta de <b>spam</b>.</p>
 
-      <!-- Email simulado (en la versión real, llega a la bandeja del usuario) -->
-      <div class="card">
-        <div class="email-sim">
-          <div class="head">📨 Bandeja de entrada · de <b>Integriva</b> · para ${u.email}</div>
-          <div class="body">
-            <div class="hero-brand-top" style="justify-content:center;font-size:1.2rem;margin-bottom:14px">
-              <span class="logo-dot"></span> Integriva
-            </div>
-            <h3>¡Hola, ${u.nombre}! 👋</h3>
-            <p class="muted" style="font-size:.92rem">Confirmá que este correo es tuyo para activar tu cuenta. Tu código de verificación es:</p>
-            <div class="code">${u.verifyCode}</div>
-            <p class="muted" style="font-size:.82rem;margin:12px 0">Ingresalo abajo, o tocá el botón para confirmar directo.</p>
-            <button class="btn block" onclick="App.verifyAccount(App.user.verifyCode)">Verificar mi cuenta ✓</button>
-          </div>
-        </div>
+        <div class="otp-group" id="otpGroup" role="group" aria-label="Código de verificación">${boxes}</div>
+        <div id="codeErr" class="error center hidden" role="alert"></div>
 
-        <div style="margin-top:18px">
-          <div class="field"><label>Ingresá el código de 6 dígitos</label>
-            <input id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:.3em;text-align:center;font-size:1.2rem"></div>
-          <div id="codeErr" class="error hidden"></div>
-          <button class="btn block big" onclick="App.verifyAccount(document.getElementById('codeInput').value.trim())">Confirmar registro →</button>
-          <p class="muted center" style="font-size:.84rem;margin-top:12px">¿No te llegó? <button class="link" onclick="App.resendCode()">Reenviar email</button></p>
-        </div>
+        <button id="verifyBtn" class="btn block big" style="margin-top:18px"
+                onclick="App.verifyAccount(App.collectOtp())">Confirmar registro →</button>
+
+        <p class="muted center" style="font-size:.88rem;margin-top:16px">¿No te llegó?
+          <button id="resendBtn" class="link" onclick="App.resendCode()">Reenviar email</button>
+          <span id="resendHint" class="muted" style="font-size:.82rem"></span></p>
       </div>
-      <p class="muted center" style="font-size:.78rem">🔒 Simulación de prueba: en la versión real, el código llega a tu correo de verdad. Acá te lo mostramos arriba.</p>
+      <p class="auth-secure center">🔒 Tus datos de salud viajan cifrados y solo vos podés verlos.</p>
+      ${demo ? `<p class="muted center" style="font-size:.82rem">⚠️ Modo demo: el envío de emails no está configurado.
+        Cargá las credenciales de Appwrite en <b>config.js</b> para que el código llegue de verdad.</p>` : ''}
     </div>`;
   },
 
@@ -586,19 +710,36 @@ App.screens = {
    ============================================================ */
 App.afterRender = {
   registro() {
-    document.getElementById('regForm').addEventListener('submit', (e) => {
+    document.getElementById('regForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target, d = Object.fromEntries(new FormData(f));
       ['edad','peso','pesoDeseado','altura'].forEach(k => d[k] = parseFloat(d[k]));
       const err = document.getElementById('regErr');
-      if (!d.sexo) { err.textContent='Elegí una opción de sexo.'; err.classList.remove('hidden'); return; }
-      if (d.peso<30||d.altura<120) { err.textContent='Revisá los valores de peso y altura.'; err.classList.remove('hidden'); return; }
-      if (!d.acepta) { err.textContent='Para continuar necesitás aceptar las Condiciones de cuidado y privacidad.'; err.classList.remove('hidden'); return; }
+      const showErr = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+      err.classList.add('hidden');
+      if (!d.sexo) { showErr('Elegí una opción de sexo.'); return; }
+      if (d.peso<30||d.altura<120) { showErr('Revisá los valores de peso y altura.'); return; }
+      if (!d.acepta) { showErr('Para continuar necesitás aceptar las Condiciones de cuidado y privacidad.'); return; }
       d.acepta = true;
       d.cal = App.calcCalories(d);
       d.verified = false;
-      d.verifyCode = String(Math.floor(100000 + Math.random()*900000)); // código simulado de 6 dígitos
-      App.user = d; App.save();
+
+      const btn = f.querySelector('button[type="submit"]');
+      btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Enviando código…';
+
+      // Reiniciamos el contador de reenvíos para este registro.
+      App.auth.resendCount = 0; App.auth.lastSentAt = 0;
+      App.user = d; App.save();   // guardamos local para que persista el userId
+
+      if (App.auth.enabled) {
+        try {
+          await App.auth.sendCode(d.email);
+        } catch (ex) {
+          btn.disabled = false; btn.classList.remove('loading'); btn.textContent = 'Calcular mis calorías →';
+          showErr(App.auth.friendly(ex));
+          return;
+        }
+      }
       App.go('verificar');
     });
   },
@@ -611,28 +752,93 @@ App.afterRender = {
       App.go('dashboard');
     });
   },
+  verificar() {
+    const boxes = Array.from(document.querySelectorAll('.otp-box'));
+    if (!boxes.length) return;
+    boxes[0].focus();
+    const onlyDigits = (s) => (s || '').replace(/\D/g, '');
+    boxes.forEach((box, i) => {
+      box.addEventListener('input', () => {
+        box.value = onlyDigits(box.value).slice(-1);
+        if (box.value && i < boxes.length - 1) boxes[i+1].focus();
+        if (boxes.every(b => b.value)) App.verifyAccount(App.collectOtp());
+      });
+      box.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace' && !box.value && i > 0) { boxes[i-1].focus(); boxes[i-1].value = ''; }
+        if (e.key === 'ArrowLeft' && i > 0) boxes[i-1].focus();
+        if (e.key === 'ArrowRight' && i < boxes.length - 1) boxes[i+1].focus();
+      });
+      box.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const digits = onlyDigits((e.clipboardData || window.clipboardData).getData('text')).slice(0, 6);
+        digits.split('').forEach((d, k) => { if (boxes[k]) boxes[k].value = d; });
+        (boxes[Math.min(digits.length, 5)] || box).focus();
+        if (boxes.every(b => b.value)) App.verifyAccount(App.collectOtp());
+      });
+    });
+  },
 };
 
 /* ============================================================
    ACCIONES
    ============================================================ */
-App.verifyAccount = function(code) {
+App.collectOtp = function() {
+  return Array.from(document.querySelectorAll('.otp-box')).map(b => b.value).join('').trim();
+};
+App._resetOtp = function() {
+  const boxes = Array.from(document.querySelectorAll('.otp-box'));
+  boxes.forEach(b => { b.value = ''; });
+  if (boxes[0]) boxes[0].focus();
+};
+
+App.verifyAccount = async function(code) {
   const err = document.getElementById('codeErr');
-  if (String(code) !== String(this.user.verifyCode)) {
-    if (err) { err.textContent = 'El código no coincide. Revisá los 6 dígitos.'; err.classList.remove('hidden'); }
-    else this.toast('El código no coincide');
-    return;
+  const btn = document.getElementById('verifyBtn');
+  if (this._verifying) return;            // evita doble envío (auto-submit + click)
+  const showErr = (m) => { if (err) { err.textContent = m; err.classList.remove('hidden'); } else this.toast(m); };
+  if (err) err.classList.add('hidden');
+
+  if (!/^\d{6}$/.test(String(code))) { showErr('Ingresá los 6 dígitos del código.'); return; }
+
+  if (this.auth.enabled) {
+    this._verifying = true;
+    if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Verificando…'; }
+    try {
+      await this.auth.verifyCode(code);
+      await this.auth.saveProfile(this.user);
+    } catch (ex) {
+      this._verifying = false;
+      if (btn) { btn.disabled = false; btn.classList.remove('loading'); btn.textContent = 'Confirmar registro →'; }
+      showErr(this.auth.friendly(ex));
+      this._resetOtp();
+      return;
+    }
+    this._verifying = false;
   }
+
   this.user.verified = true;
   this.save();
   this.toast('¡Cuenta verificada! ✓');
   this.go('calorias');
 };
-App.resendCode = function() {
-  this.user.verifyCode = String(Math.floor(100000 + Math.random()*900000));
-  this.save();
-  this.toast('📩 Te reenviamos el email con un código nuevo');
-  this.go('verificar');
+
+App.resendCode = async function() {
+  const err = document.getElementById('codeErr');
+  const link = document.getElementById('resendBtn');
+  const showErr = (m) => { if (err) { err.textContent = m; err.classList.remove('hidden'); } else this.toast(m); };
+  if (err) err.classList.add('hidden');
+
+  if (!this.auth.enabled) { this.toast('⚠️ Configurá Appwrite en config.js para enviar emails reales'); return; }
+
+  if (link) { link.disabled = true; link.textContent = 'Enviando…'; }
+  try {
+    await this.auth.sendCode(this.user.email, { isResend: true });
+    this.toast('📩 Te reenviamos el email con un código nuevo');
+  } catch (ex) {
+    showErr(this.auth.friendly(ex));
+  } finally {
+    if (link) { link.disabled = false; link.textContent = 'Reenviar email'; }
+  }
 };
 
 App.procesarPago = function() {

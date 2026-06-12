@@ -46,7 +46,36 @@ Botón **"Reiniciar demo"** (arriba a la derecha) borra todo y empieza de cero.
 - `app.js` — toda la lógica y las pantallas
 - `serve.ps1` — servidor local opcional (solo para previsualizar; no hace falta para usarlo)
 
+## Login y verificación por email (REAL, con Appwrite)
+
+El registro ya **no** usa un código de mentira: envía un **código de 6 dígitos al correo de verdad** usando [Appwrite](https://appwrite.io) (Email OTP). Para activarlo:
+
+1. **Creá una cuenta y un proyecto gratis** en https://cloud.appwrite.io.
+2. **Registrá el dominio** (sin esto Appwrite bloquea los pedidos): en el proyecto → *Overview → Add platform → Web* → agregá el *Hostname*:
+   - `localhost` (para probar en tu compu con un servidor local, ej. `serve.ps1`).
+   - `tu-sitio.netlify.app` (tu dominio real).
+3. **Pegá tus datos** en `config.js`:
+   - *Settings* → copiá el *API Endpoint* (ej. `https://fra.cloud.appwrite.io/v1`) y el *Project ID*.
+   - Son **públicos** (van en el navegador): es seguro tenerlos en el sitio.
+4. **No hace falta SQL ni base de datos:** Appwrite crea el usuario solo y el perfil se guarda en las *preferencias* privadas de cada cuenta. El código OTP de 6 dígitos viene activado de fábrica.
+
+> **Emails:** el mailer por defecto de Appwrite sirve para **probar** (pocos envíos, puede caer en spam). Para producción conviene un **SMTP propio** (ej. **Resend** o **Brevo**, gratis hasta cierto volumen): *Settings → SMTP*. Así los emails llegan confiables y con tu dominio.
+
+> **Probarlo localmente:** abrí el sitio con un servidor (no con doble clic / `file://`), porque Appwrite valida el dominio. Usá `serve.ps1` o cualquier server estático y entrá por `http://localhost`.
+
+Si `config.js` no tiene datos, la app sigue abriéndose en **modo demo** (no envía emails y lo avisa en pantalla).
+
+### Deploy en Netlify (variables de entorno)
+Para no escribir las claves en el repositorio, en el deploy generamos `config.js` solo (`generate-config.sh` + `netlify.toml`). En Netlify: *Site settings → Environment variables*, agregá:
+
+| Variable | Valor |
+|---|---|
+| `APPWRITE_ENDPOINT` | el *API Endpoint* de tu proyecto (ej. `https://fra.cloud.appwrite.io/v1`) |
+| `APPWRITE_PROJECT_ID` | el *Project ID* de Appwrite |
+
+Después *Deploys → Trigger deploy → Clear cache and deploy site*. Acordate de agregar tu dominio `.netlify.app` como *Web platform* en Appwrite (paso 2).
+
 ## Si más adelante querés la versión REAL (en producción)
-Habría que sumar: backend con base de datos, login real, **Mercado Pago de verdad** (cuenta + credenciales), recetas/cálculos validados por nutricionista, y hosting. Conviene hacerlo *después* de validar la idea con este prototipo.
+Ya tenés **login real** (arriba). Falta sumar: **Mercado Pago de verdad** (cuenta + credenciales), recetas/cálculos validados por nutricionista, y hosting. Conviene hacerlo *después* de validar la idea con este prototipo.
 
 > ⚠️ Los cálculos de calorías son orientativos y educativos. La versión real debería contar con la revisión de un/a nutricionista, y los contenidos psicológicos con tu criterio profesional.
