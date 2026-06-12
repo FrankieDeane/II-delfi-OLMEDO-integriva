@@ -103,9 +103,25 @@ const App = {
     if (inApp) this.renderNav();
 
     const r = this.screens[screen];
-    app.innerHTML = r ? r.call(this) : '<div class="wrap">Pantalla no encontrada</div>';
-    app.firstElementChild && app.firstElementChild.classList.add('fade-in');
-    if (this.afterRender[screen]) this.afterRender[screen].call(this);
+    try {
+      app.innerHTML = r ? r.call(this) : '<div class="wrap">Pantalla no encontrada</div>';
+      app.firstElementChild && app.firstElementChild.classList.add('fade-in');
+      if (this.afterRender[screen]) this.afterRender[screen].call(this);
+    } catch (e) {
+      // Nunca dejamos la pantalla en blanco: si una pantalla falla (por ejemplo,
+      // datos incompletos o de una versión anterior guardados en el navegador),
+      // mostramos una salida de recuperación en lugar de romper en silencio.
+      console.error('[Integriva] Error al renderizar la pantalla "' + screen + '":', e);
+      app.innerHTML = `
+        <div class="wrap narrow" style="text-align:center;padding-top:48px">
+          <h2>Tuvimos un problema al cargar tu espacio</h2>
+          <p class="muted" style="max-width:34em;margin:10px auto 20px">
+            Puede haber quedado información de una versión anterior en este navegador.
+            Reiniciá la demo para empezar de nuevo.</p>
+          <button class="btn big" onclick="App.reset()">Reiniciar demo</button>
+        </div>`;
+      return;
+    }
 
     // La pantalla de verificación tiene su propia URL: /verificacion
     this.syncUrl(screen, opts);
@@ -158,8 +174,12 @@ const App = {
       this.go('verificar');
       return;
     }
-    // Reanudar donde corresponde
-    if (this.membership && this.membership.active) {
+    // Reanudar donde corresponde.
+    // Solo entramos a la app si el registro guardado está completo (tiene las
+    // calorías calculadas). Si quedó un estado parcial o de una versión anterior
+    // en este navegador, volvemos al inicio en vez de romper con pantalla en blanco.
+    const userReady = this.user && this.user.cal && typeof this.user.cal.objetivo === 'number';
+    if (this.membership && this.membership.active && userReady) {
       this.go(this.prefs ? 'dashboard' : 'onboarding');
     } else {
       this.go('landing');
