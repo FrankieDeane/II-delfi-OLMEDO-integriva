@@ -286,9 +286,18 @@ App.auth = {
 
   // Traduce el error de Appwrite a un código simple + mensaje en español.
   normalize(error) {
+    // Detalle completo en la consola para diagnóstico (código, type y mensaje de Appwrite).
+    console.error('[Integriva] Error de Appwrite:', error);
     const type = (error && error.type) || '';
     const code = error && error.code;
     const msg = (error && error.message ? error.message : '').toLowerCase();
+    // Fallo de red / CORS: el navegador no pudo completar la solicitud. Lo más común es que
+    // el dominio del sitio no esté registrado como plataforma Web en el proyecto de Appwrite
+    // (o que el endpoint/Project ID sean incorrectos).
+    if (msg.includes('failed to fetch') || msg.includes('load failed') ||
+        msg.includes('networkerror') || msg.includes('cors') || code === 0) {
+      return { code: 'network', message: error && error.message };
+    }
     if (code === 429 || type.includes('rate_limit')) return { code: 'too_many', message: error && error.message };
     if (type.includes('invalid_token') || msg.includes('invalid token') || msg.includes('expired') || code === 401) {
       return { code: 'invalid', message: error && error.message };
@@ -310,7 +319,10 @@ App.auth = {
       case 'too_many':    return 'Demasiados intentos. Esperá unos minutos y volvé a probar.';
       case 'send_failed': return 'No pudimos enviar el email. Revisá la dirección e intentá de nuevo.';
       case 'duplicate':   return 'Ya existe una cuenta con este email. Te enviamos un código para ingresar.';
-      default:            return 'Ocurrió un problema. Intentá de nuevo en un momento.';
+      case 'network':     return 'No pudimos conectar con el servicio de verificación. Verificá que el dominio del sitio esté registrado como plataforma Web en Appwrite y que el endpoint sea correcto.'
+                                 + (err && err.message ? ' (' + err.message + ')' : '');
+      default:            return 'Ocurrió un problema. Intentá de nuevo en un momento.'
+                                 + (err && err.message ? ' (' + err.message + ')' : '');
     }
   },
 };
